@@ -267,6 +267,20 @@ def get_error_weights(n_qubits, measurements):
     error_weights = np.sum(errors_predicted, axis=1)
     return error_weights
 
+def run_verified_ghz(n_qubits, ver):
+     # Generatre circuits
+    circuits, errors = generate_noisy_verified_ghz_circuits(n_qubits, ver)
+    # Compile and sample
+    sampler = circuits.compile_sampler()
+    results = sampler.sample(1)
+    
+    results = results.reshape((len(errors), n_qubits + len(ver)))
+    measurements = results[:,:-len(ver)]
+    verifications = results[:,-len(ver):]
+    error_weights = get_error_weights(n_qubits, measurements)
+    n_faults = np.array([find_weight(e, n_qubits) for e in errors])
+    
+    return n_faults, error_weights, verifications
 
 def is_circuit_ft(n_qubits, ver):
     """
