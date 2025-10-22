@@ -8,7 +8,7 @@ import numpy as np
 from scipy.sparse import csc_matrix
 import itertools
 
-def generate_ghz_circuit(n_qubits: int):
+def generate_ghz_circuit(n_qubits: int, reset: bool = True):
     """
     Generate a GHZ state preparation circuit (no verification).
 
@@ -20,7 +20,8 @@ def generate_ghz_circuit(n_qubits: int):
     """
     qs = range(n_qubits)
     circuit = stim.Circuit()
-    circuit.append_operation("R", qs)  # Reset the first qubit to |0>
+    if reset:
+        circuit.append_operation("R", qs)  # Reset the first qubit to |0>
     circuit.append_operation("H", [0])  # Apply Hadamard gate to the first qubit
     for i in qs[:-1]:
         circuit.append_operation("CNOT", [i, i + 1])  # Apply CNOT from the first qubit to each other qubit
@@ -54,7 +55,7 @@ def generate_ghz_circuit_verified(n_qubits: int, ver: List[List[int]]):
     
     return circuit
 
-def generate_ghz_circuit_with_x_errors(n_qubits: int, x_error_mask: int, prepare: bool = True):
+def generate_ghz_circuit_from_error_mask(n_qubits: int, x_error_mask: int, prepare: bool = True):
     """
     Generate a GHZ state preparation circuit with possible X errors after each gate.
 
@@ -96,7 +97,51 @@ def generate_ghz_circuit_with_x_errors(n_qubits: int, x_error_mask: int, prepare
     
     return circuit
 
-def generate_ghz_verified_circuit_with_x_errors(n_qubits: int, x_error_mask: int, ver: List[List[int]], prepare: bool = True):
+def generate_ghz_circuit_from_error_dict(n_qubits: int, error_dict: dict, prepare: bool = True):
+    """
+    Generate a GHZ state preparation circuit with possible X errors after each gate.
+
+    Args:
+        n_qubits (int): Number of qubits in the GHZ state.
+        x_error_mask (int): Bitmask indicating which gates are followed by X errors.
+            Bits 0 to n_qubits-1: after R gates (one per qubit)
+            Bit n_qubits: after H gate
+            Bits n_qubits+1 and up: after each CNOT (2 bits per CNOT, encoding which qubits get X errors)
+        prepare (bool): If True, include initial reset operations.
+
+    Returns:
+        stim.Circuit: The generated circuit with X errors.
+    """
+    qs = range(n_qubits)
+    circuit = stim.Circuit()
+    # Gate 0: R
+    if prepare:
+        circuit.append_operation("R", qs)
+    for i, q in enumerate(qs):
+        if i in error_dict:
+            circuit.append_operation("X_ERROR", q, 1)
+    # Gate 1: H
+    circuit.append_operation("H", [0])
+    if n_qubits in error_dict:
+        circuit.append_operation("X_ERROR", [0], 1)
+    # Gates 2+: CNOTs
+    gate_index = n_qubits + 1
+    for i, ctrl in enumerate(qs[:-1]):
+        circuit.append_operation("CNOT", [ctrl, ctrl + 1])
+        if gate_index in error_dict and error_dict[gate_index] == "XX": # both qubits get X errors
+            circuit.append_operation("X_ERROR", [ctrl, ctrl + 1], 1)
+        elif gate_index in error_dict and error_dict[gate_index] == "IX": # only target qubit gets X error
+            circuit.append_operation("X_ERROR", [ctrl + 1], 1)
+        elif gate_index in error_dict and error_dict[gate_index] == "XI": # only control qubit gets X error
+            circuit.append_operation("X_ERROR", [ctrl], 1)
+        else: pass
+
+        gate_index += 1
+        
+    
+    return circuit, gate_index
+
+def generate_ghz_verified_circuit_from_error_maks(n_qubits: int, x_error_mask: int, ver: List[List[int]], prepare: bool = True):
     """
     Generate a verified GHZ state preparation circuit with possible X errors after each gate.
 
@@ -109,14 +154,53 @@ def generate_ghz_verified_circuit_with_x_errors(n_qubits: int, x_error_mask: int
     Returns:
         stim.Circuit: The generated verified circuit with X errors.
     """
-    circuit = generate_ghz_circuit_with_x_errors(n_qubits, x_error_mask, prepare)
+    circuit = generate_ghz_circuit_from_error_mask(n_qubits, x_error_mask, prepare)
+    meas = range(n_qubits, n_qubits + len(ver))
+    circuit.append_operation("TICK")
+    if prepare:
+        circuit.append_operation("R", meas)  # Reset the ancilla qubit
+ 
+    for i, m in enumerate(meas):
+        for q in ver[i]:
+            circuit.append_operation("CNOT", [q, m])  # Apply CNOT from the first qubit to each other qubit
+            
+    circuit.append_operation("TICK")
+    return circuit
+
+def generate_ghz_verified_circuit_from_error_dict(n_qubits: int, error_dict: dict, ver: list[list[int]], prepare: bool = True):
+    """
+    Generate a verified GHZ state preparation circuit with possible X errors after each gate.
+
+    Args:
+        n_qubits (int): Number of qubits in the GHZ state.
+        x_error_mask (int): Bitmask indicating which gates are followed by X errors.
+        ver (List[List[int]]): List of lists, each specifying which qubits are verified by each ancilla.
+        prepare (bool): If True, include initial reset operations.
+
+    Returns:
+        stim.Circuit: The generated verified circuit with X errors.
+    """
+    circuit, gate_index = generate_ghz_circuit_from_error_dict(n_qubits, error_dict, prepare)
     meas = range(n_qubits, n_qubits + len(ver))
     circuit.append_operation("TICK")
     if prepare:
         circuit.append_operation("R", meas)  # Reset the ancilla qubit
     for i, m in enumerate(meas):
+        if gate_index in dict(error_dict):
+            circuit.append_operation("X_ERROR", m, 1)
+        gate_index += 1
+    for i, m in enumerate(meas):
         for q in ver[i]:
             circuit.append_operation("CNOT", [q, m])  # Apply CNOT from the first qubit to each other qubit
+            if (gate_index in error_dict):
+                if error_dict[gate_index] == "XX": # both qubits get X errors
+                    circuit.append_operation("X_ERROR", [q, m], 1)
+                elif error_dict[gate_index] == "IX": # only target qubit gets X error
+                    circuit.append_operation("X_ERROR", [m], 1)
+                elif error_dict[gate_index] == "XI": # only control qubit gets X error
+                    circuit.append_operation("X_ERROR", [q], 1)
+            gate_index += 1
+            
     circuit.append_operation("TICK")
     return circuit
 
@@ -162,6 +246,85 @@ def generate_fixed_weight(N, k):
         c = x & -x
         r = x + c
         x = (((r ^ x) >> 2) // c) | r
+        
+def get_indices_of_set_bits(x):
+    """
+    Get the indices of set bits in an integer.
+
+    Args:
+        x (int): The integer to analyze.
+
+    Returns:
+        List[int]: List of indices where bits are set.
+    """
+    indices = []
+    index = 0
+    while x:
+        if x & 1:
+            indices.append(index)
+        x >>= 1
+        index += 1
+    return indices
+        
+        
+def add_errors_after_gates_recursively(affected_gates: list, type_mask: int):
+    one_qubit_errors = ["X"]
+    #one_qubit_errors = ["X", "Y", "Z"]
+    """two_qubit_errors = [
+        "IX", "IY", "IZ", "XI", "YI", "ZI",
+        "XX", "XY", "XZ", "YX", "YY", "YZ",
+        "ZX", "ZY", "ZZ"
+    ]"""
+    two_qubit_errors = ["IX", "XI", "XX"]
+    # Base case: only one gate
+    if len(affected_gates) == 1:
+        gate_type = (type_mask >> affected_gates[0]) & 1
+        if gate_type:  # two-qubit
+            for err in two_qubit_errors:
+                yield {affected_gates[0]: err}
+        else:  # one-qubit
+            for err in one_qubit_errors:
+                yield {affected_gates[0]: err}
+        return
+
+    # Recursive case
+    for sub_errors in add_errors_after_gates_recursively(affected_gates[1:], type_mask):
+        gate_type = (type_mask >> affected_gates[0]) & 1
+        if gate_type:
+            for err in two_qubit_errors:
+                yield sub_errors | {affected_gates[0]: err}
+        else:  
+            for err in one_qubit_errors:
+                yield sub_errors | {affected_gates[0]: err}
+
+
+def find_errors(n_gates, n_faults, type_mask):
+    for error_mask in generate_fixed_weight(n_gates, n_faults):
+        affected_gates = get_indices_of_set_bits(error_mask)
+        for error in add_errors_after_gates_recursively(affected_gates, type_mask):
+            yield error
+                
+def find_circuit_errors(n_qubits, n_ancilla=0):
+    """
+    Find all error masks with weight up to max_weight for n_qubits.
+
+    Args:
+        n_qubits (int): Number of qubits in the GHZ state.
+
+    Returns:
+        List[int]: List of error masks with valid weights.
+    """
+    max_weight = (n_qubits - 1) // 2
+    n_gates = 2 * n_qubits + 3 * n_ancilla 
+    ghz_2q_gates = (1 << (n_qubits - 1)) - 1
+    ver_2q_gates = (1 << (2 * n_ancilla)) - 1
+    type_mask = ghz_2q_gates << (n_qubits + 1) | ver_2q_gates << (2 * n_qubits + n_ancilla)
+    errors = []
+    # For each possible error weight, generate all error masks of that weight
+    for n_faults in range(1, max_weight):
+        for error_dict in find_errors(n_gates, n_faults, type_mask):
+            errors.append(error_dict)
+    return errors
 
 def find_errors_fast(n_qubits):
     """
@@ -174,7 +337,7 @@ def find_errors_fast(n_qubits):
         List[int]: List of error masks with valid weights.
     """
     max_weight = (n_qubits - 1) // 2 - 1
-    n_bits = n_qubits + 1 + n_qubits - 1
+    n_bits = 2 * n_qubits
 
     errors = []
     # For each possible error weight, generate all error masks of that weight
@@ -213,9 +376,34 @@ def generate_noisy_ghz_circuits(n_qubits: int):
     circuit = stim.Circuit()
     circuit.append_operation("R", range(n_qubits))
     for e in errors:
-        circuit += generate_ghz_circuit_with_x_errors(n_qubits, e, prepare=False)
+        circuit += generate_ghz_circuit_from_error_mask(n_qubits, e, prepare=False)
         circuit.append_operation("TICK")
         circuit.append_operation("MR", range(n_qubits))
+        circuit.append_operation("TICK")
+        
+    return circuit, errors
+
+
+
+def generate_noisy_verified_ghz_circuits_fast(n_qubits: int, ver: List[List[int]]):
+    """
+    Generate a batch of noisy verified GHZ circuits with all possible X error patterns up to max_weight.
+
+    Args:
+        n_qubits (int): Number of qubits in the GHZ state.
+        ver (List[List[int]]): List of lists, each specifying which qubits are verified by each ancilla.
+
+    Returns:
+        Tuple[stim.Circuit, List[int]]: The batch circuit and list of error masks used.
+    """
+    errors = find_errors_fast(n_qubits)
+    circuit = stim.Circuit()
+    qs = range(n_qubits + len(ver))
+    circuit.append_operation("R", qs)
+    for e in errors:
+        circuit += generate_ghz_verified_circuit_from_error_maks(n_qubits, e, ver, prepare=False)
+        circuit.append_operation("TICK")
+        circuit.append_operation("MR", qs)
         circuit.append_operation("TICK")
         
     return circuit, errors
@@ -232,21 +420,19 @@ def generate_noisy_verified_ghz_circuits(n_qubits: int, ver: List[List[int]]):
     Returns:
         Tuple[stim.Circuit, List[int]]: The batch circuit and list of error masks used.
     """
-    errors = find_errors_fast(n_qubits)
+    errors = find_circuit_errors(n_qubits, len(ver))
     circuit = stim.Circuit()
     qs = range(n_qubits + len(ver))
     circuit.append_operation("R", qs)
     for e in errors:
-        circuit += generate_ghz_verified_circuit_with_x_errors(n_qubits, e, ver, prepare=False)
+        circuit += generate_ghz_verified_circuit_from_error_dict(n_qubits, e, ver, prepare=False)
         circuit.append_operation("TICK")
         circuit.append_operation("MR", qs)
         circuit.append_operation("TICK")
         
     return circuit, errors
 
-
-def get_error_weights(n_qubits, measurements):
-    def repetition_code(n):
+def repetition_code(n):
         """
         Construct the parity check matrix of a repetition code of length n.
 
@@ -260,6 +446,9 @@ def get_error_weights(n_qubits, measurements):
         data = np.ones(2*(n - 1), dtype=np.uint8)
         return csc_matrix((data, (row_ind, col_ind)))
     
+def get_error_weights(n_qubits, measurements):
+    
+    
     H = repetition_code(n_qubits)
     m = Matching(H)
     syndromes = H@measurements.T % 2
@@ -267,9 +456,9 @@ def get_error_weights(n_qubits, measurements):
     error_weights = np.sum(errors_predicted, axis=1)
     return error_weights
 
-def run_verified_ghz(n_qubits, ver):
-     # Generatre circuits
-    circuits, errors = generate_noisy_verified_ghz_circuits(n_qubits, ver)
+def run_verified_ghz_fast(n_qubits, ver):
+    # Generatre circuits
+    circuits, errors = generate_noisy_verified_ghz_circuits_fast(n_qubits, ver)
     # Compile and sample
     sampler = circuits.compile_sampler()
     results = sampler.sample(1)
@@ -280,7 +469,87 @@ def run_verified_ghz(n_qubits, ver):
     error_weights = get_error_weights(n_qubits, measurements)
     n_faults = np.array([find_weight(e, n_qubits) for e in errors])
     
-    return n_faults, error_weights, verifications
+    return n_faults, error_weights, verifications, errors
+
+def run_verified_ghz(n_qubits: int, ver: list[list]):
+    """
+        Run a GHZ verication circuit exhaustively adding errros.
+        Parameters
+        ----------
+        n_qubits : int
+            Number of data qubits used to prepare the GHZ state.
+        ver : list[list]
+            List of qubits touched by each measurement.
+        Returns
+        -------
+        n_faults : numpy.ndarray[int]
+            1D integer array of length N giving the number of faults associated with
+            each generated noisy circuit instance. N equals the number of error
+            instances produced by generate_noisy_verified_ghz_circuits.
+        error_weights : numpy.ndarray
+            1D integer array of length N giving the weight of the final error on the data qubits.
+        verifications : numpy.ndarray
+            Binary matrix of shape (N, len(ver)) containing the sampled verification
+            measurement outcomes (0/1) for each instance and each verification bit.
+        errors : list
+            List of raw error descriptions returned by generate_noisy_verified_ghz_circuits.
+            The list length is N and each element describes the faults inserted into
+            the corresponding circuit instance.
+        Example
+        -------
+        >>> # Produce summaries for a 5-qubit GHZ with one verification
+        >>> n_faults, error_weights, verifications, errors = run_verified_ghz(5, [[0,1]])
+    """
+   
+    # Generatre circuits
+    circuits, errors = generate_noisy_verified_ghz_circuits(n_qubits, ver)
+    # Compile and sample
+    sampler = circuits.compile_sampler()
+    results = sampler.sample(1)
+    
+    results = results.reshape((len(errors), n_qubits + len(ver)))
+    measurements = results[:,:-len(ver)]
+    verifications = results[:,-len(ver):]
+    error_weights = get_error_weights(n_qubits, measurements)
+    n_faults = np.array([len(e) for e in errors])
+    
+    return n_faults, error_weights, verifications, errors
+
+def is_circuit_ft_fast(n_qubits, ver):
+    """
+    Test if the verified GHZ circuit is fault-tolerant for a given verification pattern.
+
+    Args:
+        n_qubits (int): Number of qubits in the GHZ state.
+        ver (List[List[int]]): List of lists, each specifying which qubits are verified by each ancilla.
+
+    Returns:
+        Tuple[int, int]: Number of false negatives and false positives.
+    """
+    # Generatre circuits
+    
+    circuits, errors = generate_noisy_verified_ghz_circuits_fast(n_qubits, ver)
+    # Compile and sample
+    sampler = circuits.compile_sampler()
+    results = sampler.sample(1)
+    
+    results = results.reshape((len(errors), n_qubits + len(ver)))
+    measurements = results[:,:-len(ver)]
+    verifications = results[:,-len(ver):]
+    n_faults = np.array([find_weight(e, n_qubits) for e in errors])
+    # False negatives: error weight exceeds number of faults and verification fails
+    error_weights = get_error_weights(n_qubits, measurements)
+    false_negatives = error_weights - n_faults > np.sum(verifications, axis=1)
+    # False positives: error weight does not exceed faults but verification triggers
+    # false_positives = (n_faults >= error_weights) & np.any(verifications, axis=1)
+    positives = np.any(verifications, axis=1)
+    
+    #print(f"False negatives found for verification {ver}: {false_negatives.sum()}")
+    if false_negatives.sum() > 0:
+        return False
+    else:
+        return True
+
 
 def is_circuit_ft(n_qubits, ver):
     """
@@ -294,6 +563,7 @@ def is_circuit_ft(n_qubits, ver):
         Tuple[int, int]: Number of false negatives and false positives.
     """
     # Generatre circuits
+    
     circuits, errors = generate_noisy_verified_ghz_circuits(n_qubits, ver)
     # Compile and sample
     sampler = circuits.compile_sampler()
@@ -302,17 +572,15 @@ def is_circuit_ft(n_qubits, ver):
     results = results.reshape((len(errors), n_qubits + len(ver)))
     measurements = results[:,:-len(ver)]
     verifications = results[:,-len(ver):]
+    n_faults = np.array([len(e) for e in errors])
     error_weights = get_error_weights(n_qubits, measurements)
-    n_faults = np.array([find_weight(e, n_qubits) for e in errors])
-    # False negatives: error weight exceeds number of faults and verification fails
     false_negatives = error_weights - n_faults > np.sum(verifications, axis=1)
-    # False positives: error weight does not exceed faults but verification triggers
-    # false_positives = (n_faults >= error_weights) & np.any(verifications, axis=1)
-    # print(f"False negatives found for verification {ver}: {false_negatives.sum()}")
+    
     if false_negatives.sum() > 0:
         return False
     else:
         return True
+    
     
 def search_ft_verifications(n, n_verifications):
     ft_vers = []
@@ -321,3 +589,20 @@ def search_ft_verifications(n, n_verifications):
         if is_circuit_ft(n, list(comb)):
             ft_vers.append(comb)
     return ft_vers
+
+def search_ft_verifications_fast(n, n_verifications):
+    ft_vers = []
+    tuples = [(i, j) for i in range(n) for j in range(i)]
+    for comb in itertools.combinations(tuples, n_verifications):
+        if is_circuit_ft_fast(n, list(comb)):
+            ft_vers.append(comb)
+    return ft_vers
+
+if __name__ == "__main__":
+    errors = find_circuit_errors(5, 0)
+    print(f"Number of errors found: {len(errors)}")
+    errors = find_errors_fast(5)
+    print(f"Number of errors found (fast): {len(errors)}")
+
+       
+    
