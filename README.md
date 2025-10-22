@@ -18,13 +18,13 @@ pip install -r requirements.txt
 # Calculation of the probability of discarding GHZ states for a given error probability
 
 In a GHZ preparation circuit the prepared state is discarded if any of the ancilla verification qubits flips on. Thus, the discard probability of GHZ states is the probability of at least one verification qubit flipping on. Because an error $e$ of weight $w(e)$ occurs with probability $P(e) = p^{w(e)}(1-p)^{n-w(e)}$, the discard probability can be calculated as
-$$
+```math
 \begin{align}
 \text{P}(\text{discard}) &= \sum_e \text{P}(\text{discard} | e) \cdot P(e)\\
 &=  \sum_w \text{P}(\text{discard} | w(e) = w) \cdot
 \binom{n}{w} p^{w}(1-p)^{n-w}
 \end{align}
-$$
+```
 
 where $n$ is the total number of gates. In the case of GHZ preparation circuits $n = 2\,n_{qubits} + 3\,n_{ancilla}$.
 
