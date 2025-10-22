@@ -8,7 +8,7 @@ import numpy as np
 from scipy.sparse import csc_matrix
 import itertools
 
-def generate_ghz_circuit(n_qubits: int):
+def generate_ghz_circuit(n_qubits: int, reset: bool = True):
     """
     Generate a GHZ state preparation circuit (no verification).
 
@@ -20,7 +20,8 @@ def generate_ghz_circuit(n_qubits: int):
     """
     qs = range(n_qubits)
     circuit = stim.Circuit()
-    circuit.append_operation("R", qs)  # Reset the first qubit to |0>
+    if reset:
+        circuit.append_operation("R", qs)  # Reset the first qubit to |0>
     circuit.append_operation("H", [0])  # Apply Hadamard gate to the first qubit
     for i in qs[:-1]:
         circuit.append_operation("CNOT", [i, i + 1])  # Apply CNOT from the first qubit to each other qubit
