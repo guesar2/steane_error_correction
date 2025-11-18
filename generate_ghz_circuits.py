@@ -7,6 +7,8 @@ from pymatching import Matching
 import numpy as np
 from scipy.sparse import csc_matrix
 import itertools
+from mqt.qecc.circuit_synthesis.noise import CircuitLevelNoise
+
 
 def generate_ghz_circuit(n_qubits: int, reset: bool = True):
     """
@@ -27,7 +29,7 @@ def generate_ghz_circuit(n_qubits: int, reset: bool = True):
         circuit.append_operation("CNOT", [i, i + 1])  # Apply CNOT from the first qubit to each other qubit
     return circuit
 
-def generate_ghz_circuit_verified(n_qubits: int, ver: List[List[int]]):
+def generate_ghz_circuit_verified(n_qubits: int, ver: List[List[int]], prepare: bool = True):
     """
     Generate a GHZ state preparation circuit with verification.
 
@@ -39,22 +41,31 @@ def generate_ghz_circuit_verified(n_qubits: int, ver: List[List[int]]):
         stim.Circuit: The generated verified GHZ circuit.
     """
     qs = range(n_qubits)
+    meas = range(n_qubits, n_qubits + len(ver))
     circuit = stim.Circuit()
-    circuit.append_operation("R", qs)  # Reset the first qubit to |0>
+    if prepare:
+        circuit.append_operation("R", qs)  # Reset the first qubit to |0>
+        circuit.append_operation("R", meas)  # Reset the ancilla qubit
     circuit.append_operation("H", [0])  # Apply Hadamard gate to the first qubit
     for i in qs[:-1]:
         circuit.append_operation("CNOT", [i, i + 1])  # Apply CNOT from the first qubit to each other qubit
 
-    meas = range(n_qubits, n_qubits + len(ver))
-    circuit.append_operation("R", meas)  # Reset the ancilla qubit
     for i, m in enumerate(meas):
         for q in ver[i]:
             circuit.append_operation("CNOT", [q, m])  # Apply CNOT from the first qubit to each other qubit
-    circuit.append_operation("M", meas)  # Measure the ancilla qubit
+    circuit.append_operation("MR", meas)  # Measure the ancilla qubit
     
     
     return circuit
 
+
+def generate_noisy_ghz_verification_circuit(n_qubits: int, ver: List[List[int]], p: float):
+    circuit = generate_ghz_circuit_verified(n_qubits, ver, prepare = False)
+    noisy_circuit = CircuitLevelNoise(p,p,p,p).apply(circuit)
+    noisy_circuit.append("TICK")
+    noisy_circuit.append("MR", range(n_qubits))
+    return noisy_circuit
+    
 def generate_ghz_circuit_from_error_mask(n_qubits: int, x_error_mask: int, prepare: bool = True):
     """
     Generate a GHZ state preparation circuit with possible X errors after each gate.
@@ -448,7 +459,6 @@ def repetition_code(n):
     
 def get_error_weights(n_qubits, measurements):
     
-    
     H = repetition_code(n_qubits)
     m = Matching(H)
     syndromes = H@measurements.T % 2
@@ -514,6 +524,49 @@ def run_verified_ghz(n_qubits: int, ver: list[list]):
     n_faults = np.array([len(e) for e in errors])
     
     return n_faults, error_weights, verifications, errors
+
+def run_verified_ghz_mc(n_qubits: int, ver: list[list], p: float, n_runs: int):
+    """
+        Run a GHZ verication circuit exhaustively adding errros.
+        Parameters
+        ----------
+        n_qubits : int
+            Number of data qubits used to prepare the GHZ state.
+        ver : list[list]
+            List of qubits touched by each measurement.
+        Returns
+        -------
+        n_faults : numpy.ndarray[int]
+            1D integer array of length N giving the number of faults associated with
+            each generated noisy circuit instance. N equals the number of error
+            instances produced by generate_noisy_verified_ghz_circuits.
+        error_weights : numpy.ndarray
+            1D integer array of length N giving the weight of the final error on the data qubits.
+        verifications : numpy.ndarray
+            Binary matrix of shape (N, len(ver)) containing the sampled verification
+            measurement outcomes (0/1) for each instance and each verification bit.
+        errors : list
+            List of raw error descriptions returned by generate_noisy_verified_ghz_circuits.
+            The list length is N and each element describes the faults inserted into
+            the corresponding circuit instance.
+        Example
+        -------
+        >>> # Produce summaries for a 5-qubit GHZ with one verification
+        >>> n_faults, error_weights, verifications, errors = run_verified_ghz(5, [[0,1]])
+    """
+   
+    # Generatre circuits
+    circuit = generate_noisy_ghz_verification_circuit(n_qubits, ver, p=p)
+    # Compile and sample
+    sampler = circuit.compile_sampler()
+    results = sampler.sample(n_runs)
+    
+    results = results.reshape((n_runs, n_qubits + len(ver)))
+    measurements = results[:,:-len(ver)]
+    verifications = results[:,-len(ver):]
+    error_weights = get_error_weights(n_qubits, measurements)
+    
+    return error_weights, verifications
 
 def is_circuit_ft_fast(n_qubits, ver):
     """
