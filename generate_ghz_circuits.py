@@ -536,23 +536,15 @@ def run_verified_ghz_mc(n_qubits: int, ver: list[list], p: float, n_runs: int):
             List of qubits touched by each measurement.
         Returns
         -------
-        n_faults : numpy.ndarray[int]
-            1D integer array of length N giving the number of faults associated with
-            each generated noisy circuit instance. N equals the number of error
-            instances produced by generate_noisy_verified_ghz_circuits.
         error_weights : numpy.ndarray
             1D integer array of length N giving the weight of the final error on the data qubits.
         verifications : numpy.ndarray
             Binary matrix of shape (N, len(ver)) containing the sampled verification
             measurement outcomes (0/1) for each instance and each verification bit.
-        errors : list
-            List of raw error descriptions returned by generate_noisy_verified_ghz_circuits.
-            The list length is N and each element describes the faults inserted into
-            the corresponding circuit instance.
         Example
         -------
         >>> # Produce summaries for a 5-qubit GHZ with one verification
-        >>> n_faults, error_weights, verifications, errors = run_verified_ghz(5, [[0,1]])
+        >>> error_weights, verifications = run_verified_ghz(5, [[0,1]], 0.1, 1000_000)
     """
    
     # Generatre circuits
