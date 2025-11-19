@@ -562,8 +562,8 @@ def run_verified_ghz_mc(n_qubits: int, ver: list[list], p: float, n_runs: int):
     results = sampler.sample(n_runs)
     
     results = results.reshape((n_runs, n_qubits + len(ver)))
-    measurements = results[:,:-len(ver)]
-    verifications = results[:,-len(ver):]
+    verifications = results[:,:len(ver)]
+    measurements = results[:,len(ver):]
     error_weights = get_error_weights(n_qubits, measurements)
     
     return error_weights, verifications
